@@ -24,8 +24,14 @@ void *_amfi_kext;
 bool patch_snapshot(struct pf_patch_t *patch, uint32_t *stream) {
     printf("%s: Found apfs_root_snapshot_select\n", __FUNCTION__);
 
-    stream[5] = nop;
-    stream[6] = nop;
+
+    for (uint32_t i = 0; i < patch->count; i++) {
+        stream[i] = nop;
+    }
+    uint32_t *call = pf_find_prev(stream, 0x50, 0x54000001, 0xff00001f);
+    uint32_t imm = pf_signextend_32(*call >> 5, 19);
+
+    *call = 0x14000000 | imm;
     return true;
 }
 
