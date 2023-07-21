@@ -79,12 +79,12 @@ bool patch_vnop_rootvp_auth(struct pf_patch_t *patch, uint32_t *stream) {
 
 bool patch_livefs(struct pf_patch_t *patch, uint32_t *stream) {
     char *str = fileset_follow_xref(kernel_buf, _apfs_kext, stream);
-    if (strcmp(str, "\"Failed to find the root snapshot: %s (%d). Rooting from the live fs of a sealed volume is not allowed on a RELEASE build\\n\" @%s:%d") == 0) {
+    if (strstr(str, "Rooting from the live fs of a sealed volume is not allowed on a RELEASE build") != NULL) {
         uint32_t *call = pf_find_prev(stream, 0x250, 0x37280000, 0xfff80000);
 
         if (!call) {
             call = pf_find_prev(stream, 0x100, 0x14000000, 0xfc000000);
-            
+
             if (!call) {
                 printf("%s: Failed to find call!\n", __FUNCTION__);
                 return false;
@@ -96,64 +96,6 @@ bool patch_livefs(struct pf_patch_t *patch, uint32_t *stream) {
     }
     return true;
 }
-
-bool patch_trustcache_old(struct pf_patch_t *patch, uint32_t *stream) {
-    if (found_trustcache_new) return false;
-    if(found_trustcache_old) {
-        printf("%s: Found more then one trustcache call\n", __FUNCTION__);
-        return false;
-    }
-    found_trustcache_old = true;
-
-    uint32_t *bl = stream - 1;
-    if(pf_maskmatch32(*bl, 0xaa0003f0, 0xffff03f0)) { // mov x{16-31}, x0 
-        --bl;
-    }
-    if(!pf_maskmatch32(*bl, 0x94000000, 0xfc000000)) { // bl
-        printf("%s: Missing bl\n", __FUNCTION__);
-        return false;
-    }
-
-    // Follow the call
-    uint32_t *lookup_in_static_trust_cache = fileset_follow_branch(kernel_buf, _amfi_kext, bl);
-    // Skip any redirects
-    while((*lookup_in_static_trust_cache & 0xfc000000) == 0x14000000) {
-        lookup_in_static_trust_cache = fileset_follow_branch(kernel_buf, _amfi_kext, lookup_in_static_trust_cache);
-    }
-    // We legit, trust me bro.
-    lookup_in_static_trust_cache[0] = 0xd2802020; // mov x0, 0x101
-    lookup_in_static_trust_cache[1] = ret;
-
-    printf("%s: Found trustcache\n", __FUNCTION__);
-    return true;
-}
-
-bool patch_trustcache_new(struct pf_patch_t *patch, uint32_t *stream) {
-    if (found_trustcache_old) return false;
-    if(found_trustcache_new) {
-        printf("%s: Found more then one trustcache function\n", __FUNCTION__);
-        return false;
-    }
-    found_trustcache_new = true;
-
-    // Seek backwards to start of func. This func uses local stack space,
-    // so we should always have a "sub sp, sp, 0x..." instruction.
-    uint32_t *start = pf_find_prev(stream, 20, 0xd10003ff, 0xffc003ff);
-    if(!start) {
-        printf("%s: Failed to find start of function\n", __FUNCTION__);
-        return false;
-    }
-
-    // Just replace the entire func, no prisoners today.
-    start[0] = 0xd2800020; // mov x0, 1
-    start[1] = 0xb4000042; // cbz x2, .+0x8
-    start[2] = 0xf9000040; // str x0, [x2]
-    start[3] = ret;
-
-    printf("%s: Found trustcache\n", __FUNCTION__);
-    return true;
-}
-
 
 #define addr_to_ptr(macho, addr) fileset_va_to_ptr(macho, macho_xnu_untag_va(addr))
 #define patch(macho, function, addr, size, ...) function(macho, kernel_buf + addr, size, ##__VA_ARGS__);
@@ -278,54 +220,6 @@ void patch_kernel() {
     struct pf_patchset_t livefs_patchset = pf_construct_patchset(livefs_patches, sizeof(livefs_patches) / sizeof(struct pf_patch_t), (void *) pf_find_maskmatch32);
 
     pf_patchset_emit(kernel_buf + apfs_text->offset, apfs_text->size, livefs_patchset);
-
-    struct fileset_entry_command *amfi_entry = macho_get_fileset(kernel_buf, "com.apple.driver.AppleMobileFileIntegrity");
-    struct mach_header_64 *amfi_kext = kernel_buf + amfi_entry->fileoff;
-    _amfi_kext = amfi_kext;
-
-    struct section_64 *amfi_text = macho_find_section(amfi_kext, "__TEXT_EXEC", "__text");
-    if (!amfi_text) {
-        printf("Unable to find AMFI text!\n");
-        return;
-    }
-
-
-    // r2: /x 28208052
-    uint32_t trustcache_matches_old[] = {
-        0x52802028 // mov w8, 0x101
-    };
-    uint32_t trustcache_masks_old[] = {
-        0xffffffff
-    };
-
-    struct pf_patch_t trustcache_old = pf_construct_patch(trustcache_matches_old, trustcache_masks_old, sizeof(trustcache_matches_old) / sizeof(uint32_t), (void *) patch_trustcache_old);
-
-    // r2: /x e0030091e10313aa000000949f020071e0179f1a:ffffffffffffffff000000fcffffffffffffffff
-    uint32_t trustcache_matches_new[] = {
-        0x910003e0, // mov x0, sp
-        0xaa1303e1, // mov x1, x19
-        0x94000000, // bl trustCacheQueryGetFlags
-        0x7100029f, // cmp w20, 0
-        0x1a9f17e0  // cset w0, eq
-    };
-    uint32_t trustcache_masks_new[] = {
-        0xffffffff,
-        0xffffffff,
-        0xfc000000,
-        0xffffffff,
-        0xffffffff
-    };
-
-    struct pf_patch_t trustcache_new = pf_construct_patch(trustcache_matches_new, trustcache_masks_new, sizeof(trustcache_matches_new) / sizeof(uint32_t), (void *) patch_trustcache_new);
-
-    struct pf_patch_t amfi_patches[] = {
-        trustcache_old,
-        trustcache_new
-    };
-
-    struct pf_patchset_t amfi_patchset = pf_construct_patchset(amfi_patches, sizeof(amfi_patches) / sizeof(struct pf_patch_t), (void *) pf_find_maskmatch32);
-
-    pf_patchset_emit(kernel_buf + amfi_text->offset, amfi_text->size, amfi_patchset);
 
     printf("Patching completed successfully.\n");
 }
