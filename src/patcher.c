@@ -273,7 +273,7 @@ void patch_kernel() {
 
     struct pf_patchset_t upgrade_patchset = pf_construct_patchset(upgrade_patches, sizeof(upgrade_patches) / sizeof(struct pf_patch_t), (void *) pf_find_maskmatch32);
 
-    pf_patchset_emit(kernel_buf + apfs_text->offset, apfs_text->size, upgrade_patchset);
+    //pf_patchset_emit(kernel_buf + apfs_text->offset, apfs_text->size, upgrade_patchset);
 
     printf("Patching completed successfully.\n");
 }
