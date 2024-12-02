@@ -21,6 +21,8 @@ bool found_trustcache_old;
 void *_apfs_kext;
 void *_amfi_kext;
 
+bool has_upgrade_checks;
+
 bool patch_snapshot(struct pf_patch_t *patch, uint32_t *stream) {
     printf("%s: Found apfs_root_snapshot_select\n", __FUNCTION__);
 
@@ -103,6 +105,13 @@ bool patch_livefs(struct pf_patch_t *patch, uint32_t *stream) {
     return true;
 }
 
+bool patch_upgrade_checks(struct pf_patch_t *patch, uint32_t *stream) {
+    uint32_t *call = pf_find_prev(stream, 0x250, 0xd503237f, 0xffffffff);
+    call[0] = has_upgrade_checks ? 0x52800000 : 0x52800020;
+    call[1] = ret;
+    return true;
+}
+
 #define addr_to_ptr(macho, addr) fileset_va_to_ptr(macho, macho_xnu_untag_va(addr))
 #define patch(macho, function, addr, size, ...) function(macho, kernel_buf + addr, size, ##__VA_ARGS__);
 #define find_str_in_region(str, addr, size) memmem(addr, size, str, sizeof(str));
@@ -159,14 +168,26 @@ void patch_kernel() {
         return;
     }
 
+    
+    struct section_64 *apfs_cstring = macho_find_section(apfs_kext, "__TEXT", "__cstring");
+    if (!apfs_cstring) {
+        printf("Unable to find APFS cstring!\n");
+        return;
+    }
+
+    const char upgrade_string[] = "apfs_mount_upgrade_checks";
+    const char *update_string_match = find_str_in_region(upgrade_string, kernel_buf + apfs_cstring->offset, apfs_cstring->size);
+
+    has_upgrade_checks = upgrade_string_match != NULL;
+
     uint32_t snapshot_matches[] = {
         0x52800200, // mov w0, 0x10
         0x94000000, // bl csr_check
         0xaa0003e0, // mov x*, x0
         0x52810000, // mov w0, 0x800
         0x94000000, // bl csr_check
-        0x34000000, // cbnz
-        0x34000000  // cbnz
+        0x34000000, // cbz
+        0x34000000  // cbz
     };
     uint32_t snapshot_masks[] = {
         0xffffffff, 
@@ -226,6 +247,33 @@ void patch_kernel() {
     struct pf_patchset_t livefs_patchset = pf_construct_patchset(livefs_patches, sizeof(livefs_patches) / sizeof(struct pf_patch_t), (void *) pf_find_maskmatch32);
 
     pf_patchset_emit(kernel_buf + apfs_text->offset, apfs_text->size, livefs_patchset);
+
+    uint32_t upgrade_matches[] = {
+        0x52800040, // mov w0, 0x2
+        0x94000000, // bl csr_check
+        0x34000000  // cbz
+        0x52800200, // mov w0, 0x10
+        0x94000000, // bl csr_check
+        0x34000000, // cbz
+    };
+    uint32_t upgrade_masks[] = {
+        0xffffffff, 
+        0xfc000000, 
+        0xff000000
+        0xffffffff, 
+        0xfc000000, 
+        0xff000000, 
+    };
+
+    struct pf_patch_t upgrade = pf_construct_patch(upgrade_matches, upgrade_masks, sizeof(upgrade_matches) / sizeof(uint32_t), (void *) patch_upgrade_checks);
+
+    struct pf_patch_t upgrade_patches[] = {
+        upgrade
+    };
+
+    struct pf_patchset_t upgrade_patchset = pf_construct_patchset(upgrade_patches, sizeof(upgrade_patches) / sizeof(struct pf_patch_t), (void *) pf_find_maskmatch32);
+
+    pf_patchset_emit(kernel_buf + apfs_text->offset, apfs_text->size, upgrade_patchset);
 
     printf("Patching completed successfully.\n");
 }
