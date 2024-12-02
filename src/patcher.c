@@ -176,7 +176,7 @@ void patch_kernel() {
     }
 
     const char upgrade_string[] = "apfs_mount_upgrade_checks";
-    const char *update_string_match = find_str_in_region(upgrade_string, kernel_buf + apfs_cstring->offset, apfs_cstring->size);
+    const char *upgrade_string_match = find_str_in_region(upgrade_string, kernel_buf + apfs_cstring->offset, apfs_cstring->size);
 
     has_upgrade_checks = upgrade_string_match != NULL;
 
@@ -251,10 +251,10 @@ void patch_kernel() {
     uint32_t upgrade_matches[] = {
         0x52800040, // mov w0, 0x2
         0x94000000, // bl csr_check
-        0x34000000  // cbz
+        0x34000000, // cbz
         0x52800200, // mov w0, 0x10
         0x94000000, // bl csr_check
-        0x34000000, // cbz
+        0x34000000  // cbz
     };
     uint32_t upgrade_masks[] = {
         0xffffffff, 
