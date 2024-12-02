@@ -259,10 +259,10 @@ void patch_kernel() {
     uint32_t upgrade_masks[] = {
         0xffffffff, 
         0xfc000000, 
-        0xff000000
+        0xff000000,
         0xffffffff, 
         0xfc000000, 
-        0xff000000, 
+        0xff000000
     };
 
     struct pf_patch_t upgrade = pf_construct_patch(upgrade_matches, upgrade_masks, sizeof(upgrade_matches) / sizeof(uint32_t), (void *) patch_upgrade_checks);
